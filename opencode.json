@@ -1,5 +1,1 @@
-{
-  "include": [
-    "/workspaces/agentic-coding-harness/config/opencode.json"
-  ]
-}
+/workspaces/agentic-coding-harness/config/opencode.json
