@@ -1,14 +1,14 @@
 # ==============================================================================
-# Gitignore Blueprint: Agentic Reanalysis Tool (Python)
+# Gitignore: Agentic Reanalysis Tool (Python)
 # ==============================================================================
 
-# 1. Python Compilation & Bytecode Noise
+# Python bytecode / compilation
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 
-# 2. Virtual Environments & Project Dependencies
+# Virtual environments and install artifacts
 .venv/
 venv/
 ENV/
@@ -30,27 +30,57 @@ share/python-wheels/
 .installed.cfg
 *.egg
 
-# 3. Automation, Testing, & Coverage Reports
+# Testing and coverage
 .pytest_cache/
-.htmlcov/
 .tox/
 .nosenv/
-.glance/
+.htmlcov/
 htmlcov/
-flake8/
-.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
 .mypy_cache/
+.ruff_cache/
 
-# 4. Research Data, Distribution Models, & Caching
+# Notebooks and interactive sessions
 .ipynb_checkpoints
-*.pyc
-*.log
-*.csv
-*.json
-!AGENTS.md
-!opencode.json
 
-# 5. Local Environmental Controls & Key Backups
-.env
-.secrets
+# Type checking caches
+pytype/
+.pytype/
+
+# IDE / editor noise
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings
+
+# OS metadata
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+
+# Environment and secrets
+.env
+.env.*
+.secrets
+
+# OpenCode harness-level config (shared across projects)
+opencode.json
