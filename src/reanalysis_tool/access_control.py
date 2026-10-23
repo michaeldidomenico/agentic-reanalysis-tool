@@ -24,10 +24,10 @@ _ALLOWED_TRANSITIONS: dict[State, set[State]] = {
 }
 
 _STATE_FILES: dict[State, str] = {
-    State.PLAN_PARSED: "ai_work/plan_contract.json",
-    State.DATA_INVENTORIED: "ai_work/data_inventory.json",
-    State.RUNS_COMPLETE: "ai_work/runs",
-    State.SYNTHESIZED: "ai_work/synthesis/final_report.md",
+    State.PLAN_PARSED: "plan_contract.json",
+    State.DATA_INVENTORIED: "data_inventory.json",
+    State.RUNS_COMPLETE: "runs",
+    State.SYNTHESIZED: "synthesis/final_report.md",
 }
 
 
@@ -60,8 +60,9 @@ class AccessControl:
         self._state = next_state
 
     def _detect_state(self) -> State:
-        base = Path(".").resolve()
-        for state, rel in _STATE_FILES.items():
+        base = Path(self.config.output.ai_work_dir)
+        for state in (State.SYNTHESIZED, State.RUNS_COMPLETE, State.DATA_INVENTORIED, State.PLAN_PARSED):
+            rel = _STATE_FILES[state]
             if (base / rel).exists():
                 return state
         return State.UNINITIALIZED

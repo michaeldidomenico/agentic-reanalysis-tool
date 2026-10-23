@@ -7,7 +7,6 @@ import pydantic
 import yaml
 
 
-
 class InputConfig(pydantic.BaseModel):
     analysis_plan_dir: str
     raw_data_dir: str
@@ -22,6 +21,7 @@ class OutputConfig(pydantic.BaseModel):
 class LLMConfig(pydantic.BaseModel):
     provider: str
     model: str
+    spec_model: str | None = None
     temperature: float = 0.7
     max_tokens: int = 4096
     log_prompts: bool = True
@@ -65,22 +65,16 @@ def load_config(config_path: str | Path) -> Config:
         raw = yaml.safe_load(fh)
 
     if not isinstance(raw, dict):
-        raise ValueError("Config file must contain a YAML mapping.")
+        raise TypeError("Config file must contain a YAML mapping.")
 
     config = Config.model_validate(raw)
-    _validate_paths(config)
+    _resolve_paths(config, path.resolve().parent)
     return config
 
 
-def _validate_paths(config: Config) -> None:
-    base = Path(".").resolve()
-    for name, rel in [
-        ("analysis_plan_dir", config.input.analysis_plan_dir),
-        ("raw_data_dir", config.input.raw_data_dir),
-        ("metadata_dir", config.input.metadata_dir),
-        ("ai_work_dir", config.output.ai_work_dir),
-        ("log_dir", config.llm.log_dir),
-    ]:
-        target = (base / rel).resolve()
-        if not str(target).startswith(str(base)):
-            raise ValueError(f"Config path escapes project root: {name}={rel}")
+def _resolve_paths(config: Config, base: Path) -> None:
+    config.input.analysis_plan_dir = str((base / config.input.analysis_plan_dir).resolve())
+    config.input.raw_data_dir = str((base / config.input.raw_data_dir).resolve())
+    config.input.metadata_dir = str((base / config.input.metadata_dir).resolve())
+    config.output.ai_work_dir = str((base / config.output.ai_work_dir).resolve())
+    config.llm.log_dir = str((base / config.llm.log_dir).resolve())

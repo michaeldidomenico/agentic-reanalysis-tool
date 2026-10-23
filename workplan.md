@@ -617,3 +617,104 @@ agentic-reanalysis-tool/
 | Reproducibility | Fixed settings + logged simulator uncertainty | Honest about LLM non-determinism |
 | Data visibility during spec generation | Agent sees complete raw data in its isolated workspace | Required for accurate variable mapping; isolation prevents cross-run contamination |
 | Agent framework | None — direct LLM API calls | Minimizes hidden variation; keeps dependencies minimal; maximizes reproducibility |
+
+---
+
+## 4. Current State and Lessons Learned
+
+### 4.1 Completed Implementation
+
+The following components are implemented and verified end-to-end against the demo project:
+
+- **Project scaffolding**: `pyproject.toml`, `src/reanalysis_tool/`, `examples/demo_project/`
+- **CLI & state machine**: `validate-config`, `parse-plan`, `inventory`, `run`, `synthesize`, `run-all`
+- **Config loading**: resolves paths relative to the config file location; validates project root containment
+- **Plan parser**: extracts text from PDF via `pypdf`, structures into `plan_contract.json` via OpenRouter LLM; falls back to extraction-only contract on invalid LLM output
+- **Data inventory**: deterministic inspection of CSV and Excel files; produces column metadata and candidate variable roles
+- **Workspace isolation**: creates per-run directories and copies allowed inputs (`pdf`, `docx`, `csv`, `xlsx`, etc.)
+- **Spec generator**: sends plan contract + data inventory + archetype guidance to LLM; normalizes returned paths to workspace-relative; applies deterministic fallback mappings when LLM output is incomplete
+- **Validator**: rule-based checks for plan adherence, data validity, and statistical compatibility
+- **Executor**: supports `difference_in_means`, `linear_regression`, and `logistic_regression` via `statsmodels`; computes estimates, SEs, CIs, and p-values
+- **Synthesizer**: aggregates accepted/rejected/failed runs into `summary.json` and `final_report.md`
+
+### 4.2 Demo Artifacts
+
+- **Analysis plan**: `examples/demo_project/input/analysis_plan/1808-energy-use-feedback.pdf`
+- **Synthetic dataset**: 
+  - `examples/demo_project/input/raw_data/hud_energy.csv`
+  - `examples/demo_project/input/raw_data/hud_energy.xlsx`
+- **Config**: `examples/demo_project/config.yaml`
+
+The synthetic dataset reproduces the published HUD study summary statistics:
+- Week 1 control mean ≈ 19.4 kWh; treatment difference ≈ –0.04 kWh; valid n ≈ 2981
+- Week 8 control mean ≈ 16.0 kWh; treatment difference ≈ +0.12 kWh; valid n ≈ 3029
+
+### 4.3 Confirmed Test Run
+
+Running `run --n-runs 1` against the demo project produced:
+- `estimate`: –0.04
+- `n_analytic`: 2981
+- `p_value`: 0.863
+- `conclusion_classification`: `null`
+
+This matches the published point estimate and sample size for the week-1 outcome.
+
+### 4.4 Key Lessons and Required Updates
+
+| Lesson | Impact on Plan | Action Taken / Needed |
+|--------|----------------|----------------------|
+| Free OpenRouter models have intermittent availability and rate limits. | LLM-dependent stages can fail with 404/429 errors. | Added graceful fallback in `plan_parser` and `spec_generator`; recommend a paid buffer model for reliable testing. |
+| LLMs frequently return absolute paths instead of workspace-relative paths. | Validator/rejector flags false positives for forbidden file access. | Added `_normalize_paths()` in `spec_generator` to remap paths to workspace-relative form. |
+| LLMs sometimes return empty or malformed JSON. | `run` stage fails before validation/execution. | `spec_generator` now falls back to deterministic variable mapping when JSON is invalid or empty. |
+| State detector must use `ai_work_dir` from config, not CWD. | Running from wrong directory broke state gating. | Fixed `AccessControl._detect_state()` to use `config.output.ai_work_dir`. |
+| Click command functions can shadow imported module names. | `parse_plan` CLI command caused recursion into Click internals. | Renamed imports to `run_parse_plan` / `run_synthesize`. |
+| `statsmodels.stats.norm` is not available in newer versions. | Executor crashes on p-value calculation. | Switched to `scipy.stats.norm`. |
+| `pyproject.toml` testpaths needs explicit `tests/` dir. | `pytest` exits with code 5 when no tests exist yet. | Already set; will create tests in Phase 6. |
+
+### 4.5 Testing Status
+
+- ✅ CLI plumbing and state transitions validated
+- ✅ `parse-plan`, `inventory`, `run`, `synthesize` executed end-to-end
+- ⬜ Unit tests not yet written
+- ⬜ README not yet written
+- ⬜ Lint passes with 5 remaining intentional `Exception` catches for orchestration/fallback
+
+
+---
+
+## 5. Next Steps
+
+Pick up from here in the next conversation thread.
+
+### Immediate Priorities
+
+1. **Write unit tests for non-LLM components**
+   - `tests/test_config.py`: loading, path resolution, rejection of escaped paths
+   - `tests/test_access_control.py`: state transitions, guards, detection from artifacts
+   - `tests/test_data_inventory.py`: CSV/XLSX inspection, missing files, derived insights
+   - `tests/test_validator.py`: accepted/rejected cases for rule-based checks
+   - `tests/test_executor.py`: difference-in-means, linear regression, logistic regression templates
+
+2. **Add an integration test**
+   - Run `parse-plan` → `inventory` → `run --n-runs 1` → `synthesize` against `examples/demo_project`
+   - Assert `results.json` contains accepted run with expected outcome mapping and non-null estimate
+
+3. **Improve spec generation quality**
+   - Add retry logic with backoff for free-model 429s
+   - Add a small paid fallback model config option (e.g., `z-ai/glm-5.3-flash`)
+   - Strengthen prompt to enforce strict JSON schema and workspace-relative paths
+
+4. **Write README.md**
+   - Installation, quickstart, project structure, config reference, example run command
+
+5. **Resolve remaining ruff warnings**
+   - Decide whether to keep broad `Exception` catches in orchestration/fallback code or add more granular handling
+   - Fix or explicitly exclude the remaining lint findings
+
+### Suggested Order for Next Session
+
+1. Unit tests for config, access control, data inventory, validator, executor
+2. Integration test
+3. README
+4. Spec generator robustness improvements
+5. Paid fallback model option

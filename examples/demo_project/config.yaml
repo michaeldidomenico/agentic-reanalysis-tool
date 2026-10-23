@@ -19,8 +19,9 @@ researcher_simulation:
   blind_runs: true
 
 llm:
-  provider: "openai"
-  model: "gpt-4o"
+  provider: "openrouter"
+  model: "nvidia/nemotron-3-ultra-550b-a55b:free"
+  spec_model: "nvidia/nemotron-3-ultra-550b-a55b:free"
   temperature: 0.7
   max_tokens: 4096
   log_prompts: true

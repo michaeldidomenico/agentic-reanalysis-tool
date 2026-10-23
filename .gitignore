@@ -84,3 +84,6 @@ Thumbs.db
 
 # OpenCode harness-level config (shared across projects)
 opencode.json
+
+# Agentic Reanalysis Tool generated outputs
+ai_work/
