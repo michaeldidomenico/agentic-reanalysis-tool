@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "reanalysis-tool"
+version = "0.1.0"
+description = "Agentic reanalysis tool for reproducible research synthesis"
+requires-python = ">=3.14"
+license = { text = "MIT" }
+dependencies = [
+    "click>=8.1",
+    "pydantic>=2.0",
+    "openai>=1.0",
+    "pandas>=2.2",
+    "openpyxl>=3.1",
+    "pyarrow>=15.0",
+    "pypdf>=4.0",
+    "python-docx>=1.1",
+    "statsmodels>=0.14",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+reanalysis = "reanalysis_tool.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

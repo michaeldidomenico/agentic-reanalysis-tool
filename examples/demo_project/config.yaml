@@ -1,0 +1,34 @@
+schema_version: "1.0"
+project_name: "demo_project"
+
+input:
+  analysis_plan_dir: "./input/analysis_plan"
+  raw_data_dir: "./input/raw_data"
+  metadata_dir: "./input/metadata"
+
+output:
+  ai_work_dir: "./ai_work"
+  run_isolation: true
+
+researcher_simulation:
+  mode: "archetype_stochastic"
+  number_of_runs: 6
+  archetype_sampling:
+    mode: "equal_allocation"
+  force_diversity: false
+  blind_runs: true
+
+llm:
+  provider: "openai"
+  model: "gpt-4o"
+  temperature: 0.7
+  max_tokens: 4096
+  log_prompts: true
+  log_dir: "./ai_work/logs"
+
+validation:
+  reject_plan_contradictions: true
+  reject_forbidden_file_access: true
+  reject_missing_primary_outcome_mapping: true
+  reject_empty_analytic_sample: true
+  reject_incompatible_model: true
