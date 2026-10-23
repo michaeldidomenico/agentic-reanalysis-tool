@@ -718,3 +718,56 @@ Pick up from here in the next conversation thread.
 3. README
 4. Spec generator robustness improvements
 5. Paid fallback model option
+
+---
+
+## 6. Outstanding Issues and Required Fixes
+
+### 6.1 Plan parser fallback contamination
+
+**Observed:** `plan_contract.json` can end up with fallback default values when the LLM fails. In that state, the spec generator's fallback path maps outcomes from data column-name heuristics instead of the plan contract.
+
+**Impact:** This violates the binding requirement that the analysis plan is the source of truth.
+
+**Required fix:**
+- Make `spec_generator` fallback conservative: if the plan contract's required fields are empty, do not invent variable mappings from data heuristics. Reject the run or leave mappings empty so the validator catches it.
+- Remove `raw_text` from the fallback contract, or strip it before passing the contract to `spec_generator`, to prevent accidental reliance on partial plan text.
+
+### 6.2 Spec generator reliance on raw_text / plan PDF absence
+
+**Observed:** The execution-plan LLM prompt receives `plan_contract`, `data_inventory`, and `archetype_id`. The PDF itself is not attached. When `plan_contract` is a fallback object, the only plan-derived content is a partial `raw_text` excerpt.
+
+**Impact:** Spec generation is not reliably grounded in the actual analysis plan.
+
+**Required fix:**
+- Ensure `parse-plan` succeeds against a reliable LLM endpoint so the contract is populated from structured extraction, not fallback.
+- If the plan parser fails, fail loudly and stop the pipeline rather than silently using a degraded contract.
+
+### 6.3 Unreliable free-model endpoints
+
+**Observed:** Free OpenRouter models intermittently return 404, 429, empty responses, or safety-filtered outputs like "User Safety: safe".
+
+**Impact:** LLM-dependent stages fail nondeterministically, making debugging and validation difficult.
+
+**Required fix:**
+- Add a configurable paid fallback model option in `config.yaml` (for example, `z-ai/glm-5.3-flash`).
+- Add retry logic with backoff for transient 429s.
+- Keep free models available, but document that they are for smoke testing only.
+
+### 6.4 Synthetic dataset calibration
+
+**Observed:** The demo dataset was calibrated to reproduce the published HUD study point estimates and sample sizes.
+
+**Impact:** This is not a fair validation of the workflow. It tests whether the system can recover known answers rather than whether it faithfully executes an analysis plan on unknown data.
+
+**Required fix:**
+- Regenerate `hud_energy.csv` and `hud_energy.xlsx` without anchoring to the published –0.04 / +0.12 outcomes.
+- Use the same structural features (blocking, missingness, covariate set) but with random effect sizes.
+- Treat the regenerated dataset as the canonical demo fixture going forward.
+
+### 6.5 Lint warnings
+
+**Observed:** `ruff check` reports 5 remaining findings, mostly around broad `except Exception` usage in orchestration/fallback code.
+
+**Decision needed:** Keep these broad catches intentionally for robustness, or refactor to more granular exception handling.
+
