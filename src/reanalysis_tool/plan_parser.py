@@ -1,4 +1,4 @@
-"""Parse analysis plans from PDF into a structured plan contract."""
+"""Parse analysis plans from PDF/DOCX into a structured plan contract."""
 from __future__ import annotations
 
 import hashlib
@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from docx import Document
 from pydantic import BaseModel, ValidationError
 from pypdf import PdfReader
 
@@ -34,6 +35,9 @@ class PlanContract(BaseModel):
     raw_text: str = ""
 
 
+_SUPPORTED_PLAN_EXTENSIONS = {".pdf", ".docx"}
+
+
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -42,15 +46,39 @@ def _sha256(path: Path) -> str:
     return f"sha256:{h.hexdigest()}"
 
 
+def _extract_text_from_pdf(path: Path) -> str:
+    reader = PdfReader(str(path))
+    pages = []
+    for page in reader.pages:
+        txt = page.extract_text() or ""
+        pages.append(txt)
+    return "\n".join(pages)
+
+
+def _extract_text_from_docx(path: Path) -> str:
+    doc = Document(str(path))
+    lines = []
+    for para in doc.paragraphs:
+        txt = para.text.strip()
+        if txt:
+            lines.append(txt)
+    return "\n".join(lines)
+
+
+_PLAN_TEXT_EXTRACTORS: dict[str, Any] = {
+    ".pdf": _extract_text_from_pdf,
+    ".docx": _extract_text_from_docx,
+}
+
+
 def _extract_text(path: Path) -> str:
-    if path.suffix.lower() == ".pdf":
-        reader = PdfReader(str(path))
-        pages = []
-        for page in reader.pages:
-            txt = page.extract_text() or ""
-            pages.append(txt)
-        return "\n".join(pages)
-    raise ValueError(f"Unsupported plan format: {path.suffix}")
+    ext = path.suffix.lower()
+    extractor = _PLAN_TEXT_EXTRACTORS.get(ext)
+    if extractor is None:
+        raise ValueError(
+            f"Unsupported plan format: {ext}. Supported: {sorted(_PLAN_TEXT_EXTRACTORS)}"
+        )
+    return extractor(path)
 
 
 def _extract_json(text: str) -> str:
@@ -93,8 +121,7 @@ def _structure_with_llm(text: str, config: Config) -> dict[str, Any]:
         "from the provided text. Return ONLY valid JSON matching the schema: "
         '{"plan_id":"string","primary_outcome":{"label":"string","description":"string"},'
         '"estimand":"intent_to_treat|treatment_on_the_treated|average_treatment_effect|unspecified",'
-        '"population":"string","treatment_definition":"string","comparison_definition":"string",'
-        '"primary_method":"string","secondary_outcomes":["string"],"required_analyses":["string"],'
+        '"population":"string","treatment_definition":"string","comparison_definition":"string","primary_method":"string","secondary_outcomes":["string"],"required_analyses":["string"],'
         '"constraints":["string"],"binding_commitments":{"primary_outcome":"string","estimand":"string",'
         '"population":"string","treatment_definition":"string","comparison_definition":"string","primary_method":"string"},'
         '"underspecified_elements":["string"],"ambiguities":[{"element":"string","plan_language":"string","resolution":"leave_to_evaluator|require_human_review"}]}. '
@@ -146,9 +173,16 @@ def parse_plan(config: Config) -> PlanContract:
     if not plan_dir.exists() or not plan_dir.is_dir():
         raise FileNotFoundError(f"Analysis plan directory not found: {plan_dir}")
 
-    files = [p for p in plan_dir.iterdir() if p.suffix.lower() == ".pdf"]
+    files = [
+        p
+        for p in plan_dir.iterdir()
+        if p.suffix.lower() in _SUPPORTED_PLAN_EXTENSIONS and p.is_file()
+    ]
     if not files:
-        raise FileNotFoundError("No PDF plan files found in analysis_plan_dir.")
+        supported = ", ".join(sorted(_SUPPORTED_PLAN_EXTENSIONS))
+        raise FileNotFoundError(
+            f"No supported plan files found in analysis_plan_dir. Supported: {supported}"
+        )
     if len(files) > 1:
         raise ValueError(f"Multiple plan files found: {files}. Expected exactly one.")
 
