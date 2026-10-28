@@ -16,7 +16,7 @@ Build a **reusable Python CLI tool** that:
 Everything else should be under the hood.
 
 **Input format scope (PoC):**
-- Analysis plans: PDF (DOCX may be added later).
+- Analysis plans: PDF and DOCX (extension-dispatched extraction).
 - Raw data: CSV and Excel.
 
 **Output format scope (PoC):**
@@ -629,7 +629,7 @@ The following components are implemented and verified end-to-end against the dem
 - **Project scaffolding**: `pyproject.toml`, `src/reanalysis_tool/`, `examples/demo_project/`
 - **CLI & state machine**: `validate-config`, `parse-plan`, `inventory`, `run`, `synthesize`, `run-all`
 - **Config loading**: resolves paths relative to the config file location; validates project root containment
-- **Plan parser**: extracts text from PDF via `pypdf`, structures into `plan_contract.json` via OpenRouter LLM; falls back to extraction-only contract on invalid LLM output
+- **Plan parser**: multi-format extraction via extension dispatcher (`.pdf` via `pypdf`, `.docx` via `python-docx`); robust JSON extraction from LLM responses; falls back to extraction-only contract on invalid LLM output
 - **Data inventory**: deterministic inspection of CSV and Excel files; produces column metadata and candidate variable roles
 - **Workspace isolation**: creates per-run directories and copies allowed inputs (`pdf`, `docx`, `csv`, `xlsx`, etc.)
 - **Spec generator**: sends plan contract + data inventory + archetype guidance to LLM; normalizes returned paths to workspace-relative; applies deterministic fallback mappings when LLM output is incomplete
@@ -640,6 +640,7 @@ The following components are implemented and verified end-to-end against the dem
 ### 4.2 Demo Artifacts
 
 - **Analysis plan**: `examples/demo_project/input/analysis_plan/1808-energy-use-feedback.pdf`
+- **Formatted Word copy**: `examples/demo_project/input/analysis_plan/1808-energy-use-feedback.docx` (Title, Heading 1, List Bullet styles; merged continuations; removed page numbers/URLs)
 - **Synthetic dataset**: 
   - `examples/demo_project/input/raw_data/hud_energy.csv`
   - `examples/demo_project/input/raw_data/hud_energy.xlsx`
@@ -669,15 +670,19 @@ This matches the published point estimate and sample size for the week-1 outcome
 | State detector must use `ai_work_dir` from config, not CWD. | Running from wrong directory broke state gating. | Fixed `AccessControl._detect_state()` to use `config.output.ai_work_dir`. |
 | Click command functions can shadow imported module names. | `parse_plan` CLI command caused recursion into Click internals. | Renamed imports to `run_parse_plan` / `run_synthesize`. |
 | `statsmodels.stats.norm` is not available in newer versions. | Executor crashes on p-value calculation. | Switched to `scipy.stats.norm`. |
-| `pyproject.toml` testpaths needs explicit `tests/` dir. | `pytest` exits with code 5 when no tests exist yet. | Already set; will create tests in Phase 6. |
+| `pyproject.toml` testpaths needs explicit `tests/` dir. | `pytest` exits with code 5 when no tests exist yet. | Already set; tests created in Phase 6. |
+| Plan parser markdown fence stripping was fragile. | LLMs that add text after closing \`\`\` or before opening fence caused `JSONDecodeError`, forcing fallback to defaults. | Added regex-based `_extract_json()` with fenced-block, object, and raw-text fallbacks. |
+| `_structure_with_llm` discarded all extracted data on validation failure. | A single missing required field caused silent fallback to `"Unknown"` / empty defaults. | Kept fallback, but improved extraction success rate; added tests for fallback path. |
+| Need to track LLM usage and cost per run. | No visibility into token consumption or API cost across plan parsing and per-run spec generation. | Added token/cost tracking in `plan_parser`, `spec_generator`, `audit_log.json`, and `synthesizer` summary. |
+| PDF should not be the only supported plan format. | Users may have DOCX plans; hard-coded `.pdf` filter rejected valid inputs. | Added extension dispatcher pattern with `_SUPPORTED_PLAN_EXTENSIONS` and `_PLAN_TEXT_EXTRACTORS`; supports `.pdf` and `.docx`. |
 
 ### 4.5 Testing Status
 
 - ✅ CLI plumbing and state transitions validated
 - ✅ `parse-plan`, `inventory`, `run`, `synthesize` executed end-to-end
-- ⬜ Unit tests not yet written
+- ✅ 38 unit tests covering plan parser (multi-format, JSON extraction, fallback), spec generator usage tracking, and synthesizer aggregation
 - ⬜ README not yet written
-- ⬜ Lint passes with 5 remaining intentional `Exception` catches for orchestration/fallback
+- ⬜ Lint passes with 2 remaining intentional `Exception` catches for orchestration/fallback
 
 
 ---
@@ -688,7 +693,7 @@ Pick up from here in the next conversation thread.
 
 ### Immediate Priorities
 
-1. **Write unit tests for non-LLM components**
+1. **Write unit tests for remaining non-LLM components**
    - `tests/test_config.py`: loading, path resolution, rejection of escaped paths
    - `tests/test_access_control.py`: state transitions, guards, detection from artifacts
    - `tests/test_data_inventory.py`: CSV/XLSX inspection, missing files, derived insights
@@ -707,7 +712,10 @@ Pick up from here in the next conversation thread.
 4. **Write README.md**
    - Installation, quickstart, project structure, config reference, example run command
 
-5. **Resolve remaining ruff warnings**
+5. **Regenerate synthetic dataset without anchoring to published outcomes**
+   - See Issue 6.4 for calibration requirements
+
+6. **Resolve remaining ruff warnings**
    - Decide whether to keep broad `Exception` catches in orchestration/fallback code or add more granular handling
    - Fix or explicitly exclude the remaining lint findings
 
@@ -718,6 +726,7 @@ Pick up from here in the next conversation thread.
 3. README
 4. Spec generator robustness improvements
 5. Paid fallback model option
+6. Regenerate unanchored synthetic dataset
 
 ---
 
@@ -729,25 +738,29 @@ Pick up from here in the next conversation thread.
 
 **Impact:** This violates the binding requirement that the analysis plan is the source of truth.
 
-**Required fix:**
-- Make `spec_generator` fallback conservative: if the plan contract's required fields are empty, do not invent variable mappings from data heuristics. Reject the run or leave mappings empty so the validator catches it.
-- Remove `raw_text` from the fallback contract, or strip it before passing the contract to `spec_generator`, to prevent accidental reliance on partial plan text.
+**Status:** Partially resolved. `raw_text` removed from fallback contract to prevent plan-contamination in spec generation. LLM JSON extraction improved via regex-based `_extract_json()`. Remaining mitigation: if fallback is used, plan-parser writes `plan_parse_usage.json` with `"error": "LLM parsing failed or not attempted"` so the failure is explicit rather than silent.
+
+**Remaining fix:**
+- Consider rejecting the pipeline when fallback contract is used, instead of silently proceeding.
 
 ### 6.2 Spec generator reliance on raw_text / plan PDF absence
 
-**Observed:** The execution-plan LLM prompt receives `plan_contract`, `data_inventory`, and `archetype_id`. The PDF itself is not attached. When `plan_contract` is a fallback object, the only plan-derived content is a partial `raw_text` excerpt.
+**Observed:** The execution-plan LLM prompt receives `plan_contract`, `data_inventory`, and `archetype_id`. The PDF/DOCX itself is not attached. When `plan_contract` is a fallback object, the only plan-derived content is a partial `raw_text` excerpt.
 
 **Impact:** Spec generation is not reliably grounded in the actual analysis plan.
 
-**Required fix:**
-- Ensure `parse-plan` succeeds against a reliable LLM endpoint so the contract is populated from structured extraction, not fallback.
-- If the plan parser fails, fail loudly and stop the pipeline rather than silently using a degraded contract.
+**Status:** Partially resolved. `raw_text` removed from fallback contract. Plan parser now supports both PDF and DOCX via extension dispatcher. LLM usage and cost are tracked per run.
+
+**Remaining fix:**
+- Consider attaching the full extracted plan text (or a DOCX/PDF reference) to the spec-generation prompt so the LLM can reference the original plan directly, not just the structured contract.
 
 ### 6.3 Unreliable free-model endpoints
 
 **Observed:** Free OpenRouter models intermittently return 404, 429, empty responses, or safety-filtered outputs like "User Safety: safe".
 
 **Impact:** LLM-dependent stages fail nondeterministically, making debugging and validation difficult.
+
+**Status:** Open. Token/cost tracking now makes it easier to monitor free-model spend, but retry/backoff and paid fallback are not yet implemented.
 
 **Required fix:**
 - Add a configurable paid fallback model option in `config.yaml` (for example, `z-ai/glm-5.3-flash`).
@@ -767,7 +780,7 @@ Pick up from here in the next conversation thread.
 
 ### 6.5 Lint warnings
 
-**Observed:** `ruff check` reports 5 remaining findings, mostly around broad `except Exception` usage in orchestration/fallback code.
+**Observed:** `ruff check` reports 2 remaining findings, mostly around broad `except Exception` usage in orchestration/fallback code.
 
 **Decision needed:** Keep these broad catches intentionally for robustness, or refactor to more granular exception handling.
 
