@@ -102,7 +102,28 @@ def _extract_json(text: str) -> str:
     return text
 
 
-def _structure_with_llm(text: str, config: Config) -> dict[str, Any]:
+def _usage_from_response(response, model: str) -> dict[str, Any]:
+    usage = response.usage or {}
+    if isinstance(usage, dict):
+        return {
+            "prompt_tokens": usage.get("prompt_tokens", 0) or 0,
+            "completion_tokens": usage.get("completion_tokens", 0) or 0,
+            "total_tokens": usage.get("total_tokens", 0) or 0,
+            "cost": usage.get("cost", 0.0) or 0.0,
+            "cost_currency": "USD",
+            "model": model,
+        }
+    return {
+        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+        "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+        "total_tokens": getattr(usage, "total_tokens", 0) or 0,
+        "cost": getattr(usage, "cost", 0.0) or 0.0,
+        "cost_currency": "USD",
+        "model": model,
+    }
+
+
+def _structure_with_llm(text: str, config: Config) -> tuple[dict[str, Any], dict[str, Any] | None]:
     from openai import OpenAI
 
     api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -140,9 +161,10 @@ def _structure_with_llm(text: str, config: Config) -> dict[str, Any]:
                     {"role": "user", "content": user},
                 ],
             )
+            usage = _usage_from_response(response, config.llm.model)
             content = response.choices[0].message.content or ""
             content = _extract_json(content)
-            return json.loads(content)
+            return json.loads(content), usage
         except Exception:
             if attempt == 0:
                 continue
@@ -191,9 +213,17 @@ def parse_plan(config: Config) -> PlanContract:
     source_hash = _sha256(plan_path)
 
     try:
-        data = _structure_with_llm(text, config)
+        data, usage = _structure_with_llm(text, config)
     except Exception:  # noqa: BLE001
         data = _fallback_contract(text, str(plan_path), source_hash)
+        usage = None
+
+    usage_path = Path(config.output.ai_work_dir) / "plan_parse_usage.json"
+    usage_path.parent.mkdir(parents=True, exist_ok=True)
+    usage_path.write_text(
+        json.dumps(usage or {"error": "LLM parsing failed or not attempted"}, indent=2),
+        encoding="utf-8",
+    )
 
     data["plan_id"] = data.get("plan_id", plan_path.stem)
     data["source_file"] = str(plan_path)

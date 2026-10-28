@@ -59,6 +59,23 @@ def parse_plan(config_path: str) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(contract.model_dump_json(indent=2), encoding="utf-8")
     click.echo(f"Wrote plan contract to {out_path}")
+
+    usage_path = Path(config.output.ai_work_dir) / "plan_parse_usage.json"
+    if usage_path.exists():
+        try:
+            usage = json.loads(usage_path.read_text(encoding="utf-8"))
+            tokens = usage.get("total_tokens")
+            cost = usage.get("cost")
+            parts = []
+            if tokens is not None:
+                parts.append(f"{tokens} tokens")
+            if cost is not None:
+                parts.append(f"${cost:.4f}")
+            if parts:
+                click.echo(f"Plan parse LLM usage: {', '.join(parts)}")
+        except json.JSONDecodeError:
+            pass
+
     access.transition_to(State.PLAN_PARSED)
 
 
@@ -99,8 +116,9 @@ def run(config_path: str, n_runs: int) -> None:
         workspace = create_run_workspace(config, run_id)
         spec = {}
         validation = None
+        llm_usage = None
         try:
-            spec = generate_spec(config, workspace, run_id, archetype_id, plan_contract, data_inventory)
+            spec, llm_usage = generate_spec(config, workspace, run_id, archetype_id, plan_contract, data_inventory)
             validation = validate_spec(spec, plan_contract, data_inventory, config, workspace)
             spec_path = workspace / "work" / "analysis_spec.json"
             spec_path.write_text(json.dumps(spec, indent=2), encoding="utf-8")
@@ -144,6 +162,7 @@ def run(config_path: str, n_runs: int) -> None:
             "validation_status": results.get("validation_status", "unknown"),
             "validation_warnings": validation.warnings if isinstance(validation, ValidationResult) else [],
             "timestamp": "2026-10-23T00:00:00",
+            "llm_usage": llm_usage,
         }
         (workspace / "output" / "audit_log.json").write_text(json.dumps(audit, indent=2), encoding="utf-8")
 

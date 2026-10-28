@@ -1,6 +1,7 @@
 """Tests for plan_parser JSON extraction, fallback behavior, and multi-format support."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -136,9 +137,12 @@ class TestFallbackContract:
 
 
 class TestStructureWithLlm:
-    def _make_response(self, content: str):
+    def _make_response(self, content: str, usage: dict | None = None):
         response = MagicMock()
         response.choices[0].message.content = content
+        if usage is None:
+            usage = {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": 0.0}
+        response.usage = usage
         return response
 
     def test_successful_json_extraction(self, config):
@@ -147,9 +151,10 @@ class TestStructureWithLlm:
             '```json\n{"plan_id": "p1", "primary_outcome": {"label": "x", "description": "y"}, "estimand": "intent_to_treat", "population": "pop", "treatment_definition": "t", "comparison_definition": "c", "primary_method": "m"}\n```'
         )
         with patch("openai.OpenAI", return_value=client):
-            result = _structure_with_llm("plan text", config)
+            result, usage = _structure_with_llm("plan text", config)
         assert result["plan_id"] == "p1"
         assert result["estimand"] == "intent_to_treat"
+        assert usage["total_tokens"] == 30
 
     def test_trailing_text_after_fence(self, config):
         client = MagicMock()
@@ -157,8 +162,9 @@ class TestStructureWithLlm:
             '{"plan_id": "p1", "primary_outcome": {"label": "x", "description": "y"}, "estimand": "intent_to_treat", "population": "pop", "treatment_definition": "t", "comparison_definition": "c", "primary_method": "m"}\n```\n\nLet me know if you need anything else.'
         )
         with patch("openai.OpenAI", return_value=client):
-            result = _structure_with_llm("plan text", config)
+            result, usage = _structure_with_llm("plan text", config)
         assert result["plan_id"] == "p1"
+        assert usage["total_tokens"] == 30
 
     def test_retry_on_first_malformed_response(self, config):
         client = MagicMock()
@@ -167,9 +173,10 @@ class TestStructureWithLlm:
             self._make_response('{"plan_id": "p1", "primary_outcome": {"label": "x", "description": "y"}, "estimand": "intent_to_treat", "population": "pop", "treatment_definition": "t", "comparison_definition": "c", "primary_method": "m"}'),
         ]
         with patch("openai.OpenAI", return_value=client):
-            result = _structure_with_llm("plan text", config)
+            result, usage = _structure_with_llm("plan text", config)
         assert result["plan_id"] == "p1"
         assert client.chat.completions.create.call_count == 2
+        assert usage["total_tokens"] == 30
 
     def test_raises_after_two_failures(self, config):
         client = MagicMock()
@@ -205,7 +212,7 @@ class TestParsePlan:
 
         config.input.analysis_plan_dir = str(tmp_path)
         bad_data = {"plan_id": "p1"}
-        with patch("reanalysis_tool.plan_parser._structure_with_llm", return_value=bad_data):
+        with patch("reanalysis_tool.plan_parser._structure_with_llm", return_value=(bad_data, {"total_tokens": 5})):
             contract = parse_plan(config)
         assert contract.plan_id == "1808-energy-use-feedback"
         assert contract.estimand == "unspecified"
@@ -226,12 +233,27 @@ class TestParsePlan:
             "comparison_definition": "c",
             "primary_method": "m",
         }
-        with patch("reanalysis_tool.plan_parser._structure_with_llm", return_value=fake_data):
+        fake_usage = {
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+            "cost": 0.0,
+            "cost_currency": "USD",
+            "model": "mock-model",
+        }
+        with patch("reanalysis_tool.plan_parser._structure_with_llm", return_value=(fake_data, fake_usage)):
             contract = parse_plan(config)
         assert contract.plan_id == "1808"
         assert contract.estimand == "intent_to_treat"
         assert contract.source_file.endswith(".docx")
         assert "Average daily energy use" in contract.primary_outcome["label"]
+
+        usage_path = tmp_path / "plan_parse_usage.json"
+        if not usage_path.exists():
+            usage_path = Path(config.output.ai_work_dir) / "plan_parse_usage.json"
+        usage = json.loads(usage_path.read_text(encoding="utf-8"))
+        assert usage["total_tokens"] == 150
+        assert usage["prompt_tokens"] == 100
 
     def test_parses_pdf_without_fallback(self, tmp_path, config):
         pdf_src = Path("examples/demo_project/input/analysis_plan/1808-energy-use-feedback.pdf")
@@ -249,12 +271,25 @@ class TestParsePlan:
             "comparison_definition": "c",
             "primary_method": "m",
         }
-        with patch("reanalysis_tool.plan_parser._structure_with_llm", return_value=fake_data):
+        fake_usage = {
+            "prompt_tokens": 200,
+            "completion_tokens": 80,
+            "total_tokens": 280,
+            "cost": 0.0,
+            "cost_currency": "USD",
+            "model": "mock-model",
+        }
+        with patch("reanalysis_tool.plan_parser._structure_with_llm", return_value=(fake_data, fake_usage)):
             contract = parse_plan(config)
         assert contract.plan_id == "1808"
         assert contract.estimand == "intent_to_treat"
         assert contract.source_file.endswith(".pdf")
         assert "Average daily energy use" in contract.primary_outcome["label"]
+
+        usage_path = Path(config.output.ai_work_dir) / "plan_parse_usage.json"
+        usage = json.loads(usage_path.read_text(encoding="utf-8"))
+        assert usage["total_tokens"] == 280
+        assert usage["prompt_tokens"] == 200
 
     def test_raises_when_multiple_plan_files_present(self, tmp_path, config):
         pdf_src = Path("examples/demo_project/input/analysis_plan/1808-energy-use-feedback.pdf")

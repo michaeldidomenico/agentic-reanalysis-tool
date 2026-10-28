@@ -19,8 +19,9 @@ def generate_spec(
     archetype_id: str,
     plan_contract: dict[str, Any],
     data_inventory: dict[str, Any],
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     spec: dict[str, Any] = {}
+    usage: dict[str, Any] | None = None
     try:
         prompt = spec_generation_prompt(plan_contract, data_inventory, archetype_id)
 
@@ -45,6 +46,25 @@ def generate_spec(
                 {"role": "user", "content": prompt},
             ],
         )
+        raw_usage = response.usage or {}
+        if isinstance(raw_usage, dict):
+            usage = {
+                "prompt_tokens": raw_usage.get("prompt_tokens", 0) or 0,
+                "completion_tokens": raw_usage.get("completion_tokens", 0) or 0,
+                "total_tokens": raw_usage.get("total_tokens", 0) or 0,
+                "cost": raw_usage.get("cost", 0.0) or 0.0,
+                "cost_currency": "USD",
+                "model": model,
+            }
+        else:
+            usage = {
+                "prompt_tokens": getattr(raw_usage, "prompt_tokens", 0) or 0,
+                "completion_tokens": getattr(raw_usage, "completion_tokens", 0) or 0,
+                "total_tokens": getattr(raw_usage, "total_tokens", 0) or 0,
+                "cost": getattr(raw_usage, "cost", 0.0) or 0.0,
+                "cost_currency": "USD",
+                "model": model,
+            }
         content = response.choices[0].message.content or "{}"
         content = content.strip()
         if content.startswith("```"):
@@ -62,7 +82,7 @@ def generate_spec(
     spec.setdefault("run_id", run_id)
     spec.setdefault("archetype", archetype_id)
     spec = _normalize_paths(spec, workspace)
-    return _apply_fallback(spec, plan_contract, data_inventory, workspace)
+    return _apply_fallback(spec, plan_contract, data_inventory, workspace), usage
 
 
 def _normalize_paths(spec: dict[str, Any], workspace: Path) -> dict[str, Any]:
