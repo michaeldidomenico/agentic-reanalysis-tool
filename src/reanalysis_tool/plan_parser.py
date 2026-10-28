@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,27 @@ def _extract_text(path: Path) -> str:
     raise ValueError(f"Unsupported plan format: {path.suffix}")
 
 
+def _extract_json(text: str) -> str:
+    """Pull a JSON object out of likely LLM return patterns.
+
+    Order of preference:
+    1. First ```json ... ``` or ``` ... ``` fenced block.
+    2. First top-level {...} object in the text.
+    3. The stripped raw text as a last resort.
+    """
+    text = text.strip()
+    # 1) Markdown code fence with or without language tag
+    match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
+    if match:
+        return match.group(1).strip()
+    # 2) First top-level JSON object
+    match = re.search(r'\{[\s\S]*\}', text)
+    if match:
+        return match.group(0).strip()
+    # 3) Fallback to whatever is left
+    return text
+
+
 def _structure_with_llm(text: str, config: Config) -> dict[str, Any]:
     from openai import OpenAI
 
@@ -91,18 +113,14 @@ def _structure_with_llm(text: str, config: Config) -> dict[str, Any]:
                     {"role": "user", "content": user},
                 ],
             )
-            content = response.choices[0].message.content or "{}"
-            content = content.strip()
-            if content.startswith("```"):
-                content = "\n".join(content.splitlines()[1:])
-            if content.endswith("```"):
-                content = "\n".join(content.splitlines()[:-1])
-            return json.loads(content.strip())
-        except Exception: # BLE001 allowed for LLM fallback
+            content = response.choices[0].message.content or ""
+            content = _extract_json(content)
+            return json.loads(content)
+        except Exception:
             if attempt == 0:
                 continue
             raise
-    return {}
+    raise OSError("LLM plan parsing failed after retries.")
 
 
 def _fallback_contract(text: str, source_file: str, source_hash: str) -> dict[str, Any]:
@@ -120,7 +138,6 @@ def _fallback_contract(text: str, source_file: str, source_hash: str) -> dict[st
         "binding_commitments": {},
         "underspecified_elements": ["full plan parsing requires LLM configuration"],
         "ambiguities": [],
-        "raw_text": text[:2000],
     }
 
 
@@ -141,8 +158,7 @@ def parse_plan(config: Config) -> PlanContract:
 
     try:
         data = _structure_with_llm(text, config)
-        data.setdefault("raw_text", text[:4000])
-    except Exception: # BLE001 allowed for LLM fallback
+    except Exception:  # noqa: BLE001
         data = _fallback_contract(text, str(plan_path), source_hash)
 
     data["plan_id"] = data.get("plan_id", plan_path.stem)
