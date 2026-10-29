@@ -125,7 +125,6 @@ def run(config_path: str, n_runs: int) -> None:
 
             if validation.accepted:
                 results = execute_spec(spec, workspace)
-                results["validation_status"] = "accepted"
             else:
                 results = {
                     "schema_version": "1.0",
